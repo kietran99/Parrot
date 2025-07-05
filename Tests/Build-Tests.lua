@@ -5,6 +5,8 @@ project "Tests"
     staticruntime "Off"
     exceptionhandling "Off"
 
+    fatalwarnings { "all" }
+
     files
     {
         "*.h",

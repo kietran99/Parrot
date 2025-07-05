@@ -1,4 +1,4 @@
-project "Placeholder"
+project "Parrot"
     kind "StaticLib"
     language "C++"
     cppdialect "C++latest"

@@ -1,4 +1,4 @@
-workspace "Placeholder-Tests"
+workspace "Parrot-Tests"
     architecture "x64"
     configurations { "Debug", "Release", "Dist" }
     startproject "Tests"

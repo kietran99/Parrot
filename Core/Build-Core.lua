@@ -5,6 +5,8 @@ project "Parrot"
     staticruntime "Off"
     exceptionhandling "Off"
 
+    fatalwarnings { "all" }
+
     files
     {
         "Public/**.h",

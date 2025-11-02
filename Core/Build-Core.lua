@@ -12,6 +12,8 @@ project "Parrot"
         "Public/**.h",
         "Source/Common/**.h",
         "Source/Common/**.cpp",
+        "Source/Detail/**.h",
+        "Source/Detail/**.cpp",
     }
 
     filter "system:windows"

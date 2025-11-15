@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -64,6 +65,74 @@ private:
 
 namespace parrot
 {
+template<class T, std::regular_invocable<T> Fn>
+	requires not std::same_as<std::invoke_result_t<Fn, T>, void>
+auto MapOrDefault(std::weak_ptr<T> weakPtr, Fn&& fn, std::invoke_result_t<Fn, T> defaultValue) -> std::invoke_result_t<Fn, T>
+{
+	if (auto strongPtr = weakPtr.lock())
+	{
+		return std::invoke(std::forward<Fn>(fn), *strongPtr);
+	}
+
+	return defaultValue;
+}
+
+template<class C>
+concept Emittable = requires(C instance)
+{
+	typename C::ValueType;
+	{ instance.Push(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
+};
+
+template<class C, class T>
+concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
+
+namespace emit
+{
+template<class C, class Emitter>
+concept Preprocessable = requires(C instance, const Emitter& emitter)
+{
+	typename C::ValueType;
+	requires EmittableOf<Emitter, typename C::ValueType>;
+	{ instance.PrePush(std::declval<typename C::ValueType>(), emitter) } -> std::same_as<bool>;
+};
+
+namespace preprocess
+{
+template<class T>
+struct Never
+{
+	using ValueType = T;
+
+	constexpr bool PrePush(ValueType&& value, const Emittable auto& emitter) const
+	{
+		return false;
+	}
+};
+
+template<class T>
+struct None
+{
+	using ValueType = T;
+
+	constexpr bool PrePush(ValueType&& value, const Emittable auto& emitter) const
+	{
+		return emitter.Push(std::move(value));
+	}
+};
+}
+}
+
+
+
+
+template<class C>
+concept Sinkable = requires(C instance)
+{
+	typename C::ValueType;
+	{ instance.Receive(std::declval<typename C::ValueType>()) };
+};
+
 template<class C, class TIn>
 concept SinkableOf = requires(C instance)
 {
@@ -72,24 +141,35 @@ concept SinkableOf = requires(C instance)
 
 namespace sink
 {
+template<class C, class Sink>
+concept Postprocessable = requires(C instance, const Sink& sink)
+{
+	typename C::ValueType;
+	{ instance.PostInvoke(std::declval<typename C::ValueType>(), sink) } -> std::same_as<bool>;
+};
+
 template<class T>
 struct None
 {
-	void Receive(T value) const {}
+	using ValueType = T;
+
+	void Receive(T) const {}
 };
 
 template<class T>
 class Snapshot
 {
 public:
+	using ValueType = T;
+
 	Snapshot(T&& initValue)
-		: value(std::forward<T>(initValue))
+		: value(std::move(initValue))
 	{
 	}
 
 	constexpr const T& Value() const { return value; }
 
-	void Receive(T newValue) const
+	constexpr void Receive(T newValue) const
 	{
 		value = std::move(newValue);
 	}
@@ -107,51 +187,43 @@ concept Linkable = requires(C instance)
 {
 	typename C::ValueType;
 	{ instance.Push(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
-	//{ instance.Link(std::declval<sink::None<typename C::ValueType>>()) };
-	//{ instance.Unlink(std::declval<sink::None<typename C::ValueType>>()) };
 };
+
+template<class C, class T>
+concept LinkableOf = Linkable<C> and std::same_as<typename C::ValueType, T>;
 
 namespace link
 {
 namespace edge
 {
 template<class T>
-struct Simple
+class Simple
 {
+public:
 	using ValueType = T;
-	using NextFn = std::function<bool(ValueType)>;
+	using NextFn = std::function<bool(ValueType&&)>;
+
+	constexpr Simple(const SinkableOf<ValueType> auto& sink)
+		: next(std::bind(&decltype(sink)::Receive, sink, std::placeholders::_1))
+		//: next([sink](ValueType&& value) { sink.Receive(std::move(value)); return true; })
+	{}
 
 	constexpr bool Push(ValueType&& value) const
 	{
 		assert(next != nullptr);
-		return std::invoke(next, value);
+		return std::invoke(next, std::move(value));
 	}
 
-	//constexpr NextFn Link(const SinkableOf<ValueType> auto& sink) const
-	//{
-	//	return [&sink](ValueType value) { sink.Receive(std::move(value)); };
-	//}
-
-	//constexpr auto Unlink(const SinkableOf<ValueType> auto&) const
-	//{
-	//	next = nullptr;
-	//}
-
+private:
 	NextFn next;
 };
 }
 
-namespace socket
+namespace port
 {
-template<class C>
-concept Emittable = requires(C instance)
+namespace in
 {
-	typename C::ValueType;
-	{ instance.Push(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
-};
-
-template<class T, Linkable Link>
-	requires std::same_as<typename Link::ValueType, T>
+template<class T, LinkableOf<T> Link>
 class Unicast
 {
 public:
@@ -160,105 +232,133 @@ public:
 
 	constexpr bool Push(ValueType&& value) const
 	{
-		return optLink.transform([&value](const LinkType& link) { return link.Push(std::move(value)); }).value_or(false);
+		return MapOrDefault(m_optLink, [&value](const LinkType& link) { return link.Push(std::move(value)); }, false);
 	}
 
-	constexpr void Connect(LinkType&& link) const
+	constexpr void Connect(std::weak_ptr<LinkType> link) const
 	{
-		optLink = link;
-	}
-
-	constexpr void Disconnect(const LinkType&) const
-	{
-		optLink = std::nullopt;
+		assert(!link.expired());
+		m_optLink = link;
 	}
 
 private:
-	mutable std::optional<LinkType> optLink;
-};
-}
-}
-
-template<class C>
-concept EmitValidatable = requires(C instance)
-{
-	typename C::ValueType;
-	{ instance.IsValid(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
-};
-
-namespace emit
-{
-namespace validator
-{
-template<class T>
-struct Never
-{
-	using ValueType = T;
-
-	constexpr bool IsValid(const ValueType&) const { return false; }
+	mutable std::weak_ptr<LinkType> m_optLink;
 };
 
 template<class T>
-struct Always
-{
-	using ValueType = T;
-
-	constexpr bool IsValid(const ValueType&) const { return true; }
-};
+using UnicastSimple = Unicast<T, edge::Simple<T>>;
 }
 
-//template<class T, template<class> class SocketIn, template<class> class EmitValidator>
-//	requires link::socket::Emittable<SocketIn<T>>
-//		and EmitValidatable<EmitValidator<T>>
-//		and std::same_as<typename EmitValidator<T>::ValueType, typename SocketIn<T>::ValueType>
-//struct WithLink
+namespace out
+{
+template<class T, LinkableOf<T> Link>
+class Unicast
+{
+public:
+	using ValueType = T;
+	using LinkType = Link;
+
+	constexpr bool Receive(ValueType&& value) const
+	{
+		return std::invoke(m_handler, std::move(value));
+	}
+
+	constexpr void Connect(std::shared_ptr<LinkType> link) const
+	{
+		assert(link != nullptr);
+		m_link = link;
+	}
+
+private:
+	mutable std::shared_ptr<Link> m_link;
+	std::function<bool(ValueType&&)> m_handler;
+};
+
+template<class T>
+using UnicastSimple = Unicast<T, edge::Simple<T>>;
+}
+}
+}
+
+
+
+
+//template<class T, template<class> class PortIn, template<class> class Preprocessor>
+//	requires Emittable<PortIn<T>>
+//		and emit::Preprocessable<Preprocessor<T>>
+//		and std::same_as<typename Preprocessor<T>::ValueType, typename PortIn<T>::ValueType>
+//struct Emitter
 //{
 //	using ValueType = T;
 //
-//	constexpr WithLink(SocketIn<T>&& socketIn, EmitValidator<T>&& emitValidator)
-//		: socketIn(socketIn)
-//		, emitValidator(emitValidator)
+//	constexpr Emitter(PortIn<T>&& port, Preprocessor<T>&& preprocessor)
+//		: m_port(port)
+//		, m_preprocessor(preprocessor)
 //	{
 //	}
 //
 //	constexpr bool Push(ValueType value) const
 //	{
-//		return Emit(std::move(value), socketIn, emitValidator);
+//		return Emit(std::move(value), m_port, m_preprocessor);
 //	}
 //
-//	SocketIn<T> socketIn{};
-//	EmitValidator<T> emitValidator{};
+//	PortIn<T> m_port;
+//	Preprocessor<T> m_preprocessor;
 //};
 
-template<class T, link::socket::Emittable SocketIn, EmitValidatable EmitValidator>
-	requires std::same_as<typename SocketIn::ValueType, T>
-		and std::same_as<typename EmitValidator::ValueType, T>
-		and std::same_as<typename EmitValidator::ValueType, typename SocketIn::ValueType>
-struct WithLink
+template<class T, Emittable PortIn, emit::Preprocessable<PortIn> Preprocessor>
+	requires std::same_as<typename PortIn::ValueType, T>
+		and std::same_as<typename Preprocessor::ValueType, T>
+		and std::same_as<typename Preprocessor::ValueType, typename PortIn::ValueType>
+class Emitter
 {
+public:
 	using ValueType = T;
 
-	constexpr WithLink(SocketIn&& socketIn, EmitValidator&& emitValidator)
-		: socketIn(socketIn)
-		, emitValidator(emitValidator)
-	{}
+	constexpr Emitter(PortIn&& port, Preprocessor&& preprocessor)
+		: m_port(port)
+		, m_preprocessor(preprocessor)
+	{
+	}
 
 	constexpr bool Push(ValueType value) const
 	{
-		return emitValidator.IsValid(value) ? socketIn.Push(std::forward<T>(value)) : false;
+		return m_preprocessor.PrePush(std::move(value), m_port);
 	}
 
-	SocketIn socketIn{};
-	EmitValidator emitValidator{};
+private:
+	PortIn m_port;
+	Preprocessor m_preprocessor;
 };
-}
 
-template<class C>
-concept Emittable = requires(C instance)
+
+
+
+template<class T, template<class> class Postprocessor, template<class> class PortOut>
+	requires sink::Postprocessable<Postprocessor<T>, PortOut>
+		and Sinkable<PortOut<T>>
+		and std::same_as<typename PortOut<T>::ValueType, typename Postprocessor<T>::ValueType>
+class Sink
 {
-	typename C::SourceType;
-	{ instance.Push(std::declval<typename C::SourceType>()) };
+public:
+	using ValueType = T;
+
+	Sink(PortOut<T>&& port, Postprocessor<T>&& postprocessor)
+		: m_port(port)
+		, m_postprocessor(postprocessor)
+	{}
+
+	constexpr bool operator()(ValueType&& value) const
+	{
+		//return m_postprocessor.PostInvoke(std::move(value), m_port);
+	}
+
+private:
+	PortOut<T> m_port;
+	Postprocessor<T> m_postprocessor;
 };
+
+
 
 template<Emittable Emitter, std::regular_invocable<typename Emitter::SourceType> Operation>
 struct SignalClosure
@@ -299,41 +399,6 @@ struct SignalClosure
 
 	const Emitter& emitter;
 	Operation operation;
-};
-
-template<class T>
-struct UnicastSignal
-{
-	using SourceType = T;
-
-	UnicastSignal() = default;
-
-	template<Emittable Emitter, std::regular_invocable<typename Emitter::SourceType> Operation>
-	UnicastSignal(SignalClosure<Emitter, Operation>&& signalClosure)
-	{
-		signalClosure.emitter.Link(signalClosure.NewSinkRefProxy<UnicastSignal<SourceType>, SourceType>(*this));
-	}
-
-	constexpr void Push(SourceType value) const
-	{
-		Receive(value);
-	}
-
-	constexpr void Receive(SourceType value) const
-	{
-		if (next)
-		{
-			std::invoke(next, std::forward<SourceType>(value));
-		}
-	}
-
-	template<SinkableOf<SourceType> Sink>
-	constexpr void Link(const Sink& sink) const
-	{
-		next = [&sink](SourceType value) { sink.Receive(std::move(value)); };
-	}
-
-	mutable std::function<void(SourceType)> next{ nullptr };
 };
 
 template<class T>

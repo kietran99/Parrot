@@ -40,6 +40,42 @@ static void Test()
 
 struct CustomType {};
 
+namespace parrot::emit::mock
+{
+// An emitter that satisfies EmittableOf and allows us to check its state
+template<class T>
+struct Emitter
+{
+	using ValueType = T;
+
+	bool Push(T value) const
+	{
+		pushCallCount++;
+		return pushReturnValue;
+	}
+
+	mutable int pushCallCount = 0;
+	mutable bool pushReturnValue = true;
+};
+
+// An emitter for move-only types
+template<class T>
+struct MoveEmitter
+{
+	using ValueType = T;
+
+	bool Push(T&& value) const
+	{
+		pushCallCount++;
+		lastPushedValue = std::move(value);
+		return true;
+	}
+
+	mutable int pushCallCount = 0;
+	mutable T lastPushedValue;
+};
+}
+
 TEST_CASE("Sinkable concept & built-in types")
 {
 	using namespace parrot;
@@ -152,80 +188,155 @@ TEST_CASE("Sinkable concept & built-in types")
 TEST_CASE("Emittable concept & built-in types")
 {
 	using namespace parrot;
+	using namespace emit;
 
-	SUBCASE("EmitValidatable concept validation")
+	// Local types for checking concept validation
+	struct CustomType
 	{
-		// Class 1: Correct signature (bool IsValid(const ValueType&) const)
-		struct SampleCorrectValidator
+	};
+	using EmitterInt = mock::Emitter<int32_t>;
+	using EmitterCustom = mock::Emitter<CustomType>;
+
+	SUBCASE("Preprocessable concept validation")
+	{
+		// Class 1: Correct signature (matches Never/None)
+		struct SampleCorrectRRef
 		{
 			using ValueType = int32_t;
-			bool IsValid(const ValueType&) const { return true; }
+			bool PrePush(ValueType&&, const EmitterInt&) const
+			{
+				return true;
+			}
 		};
 
-		// Class 2: Correct signature with a different type
-		struct SampleCorrectValidatorCustom
+		// Class 2: Missing requirement (Missing ValueType)
+		struct SampleMissingValueType
 		{
-			using ValueType = CustomType;
-			bool IsValid(const ValueType&) const { return true; }
+			bool PrePush(int32_t&&, const EmitterInt&) const
+			{
+				return true;
+			}
 		};
 
-		// Class 3: Missing requirement (Missing ValueType)
-		struct SampleMissingValueType {
-			bool IsValid(const int32_t&) const { return true; }
-		};
-
-		// Class 4: Incorrect IsValid signature (wrong return type 'int' instead of 'bool')
-		struct SampleWrongReturnType
-		{
-			using ValueType = int32_t;
-			int IsValid(const ValueType&) const { return 1; }
-		};
-
-		// Class 7: Private members (should fail concept check)
-		class SamplePrivateIsValid
+		// Class 3: Incorrect PrePush signature (wrong return type 'void')
+		struct SampleWrongReturn
 		{
 			using ValueType = int32_t;
-			bool IsValid(const ValueType&) const { return true; }
+			void PrePush(ValueType&&, const EmitterInt&) const
+			{
+			}
+		};
+
+		// Class 4: Incorrect Emitter constraint (Emitter can't handle float)
+		struct SampleWrongEmitter
+		{
+			using ValueType = float; // EmitterInt cannot emit a float
+			bool PrePush(ValueType&&, const EmitterInt&) const
+			{
+				return true;
+			}
 		};
 
 		// --- Static Assertions ---
-		static_assert(EmitValidatable<SampleCorrectValidator>);
-		static_assert(EmitValidatable<SampleCorrectValidatorCustom>);
-
-		static_assert(not EmitValidatable<SampleMissingValueType>);
-		static_assert(not EmitValidatable<SampleWrongReturnType>);
-		static_assert(not EmitValidatable<SamplePrivateIsValid>);
+		static_assert(Preprocessable<SampleCorrectRRef, EmitterInt>);
+		static_assert(not Preprocessable<SampleMissingValueType, EmitterInt>);
+		static_assert(not Preprocessable<SampleWrongReturn, EmitterInt>);
+		static_assert(not Preprocessable<SampleWrongEmitter, EmitterInt>);
 
 		// Check built-in types
-		static_assert(EmitValidatable<emit::validator::Never<float>>);
-		static_assert(EmitValidatable<emit::validator::Always<std::string>>);
+		static_assert(Preprocessable<preprocess::Never<int32_t>, EmitterInt>);
+		static_assert(Preprocessable<preprocess::None<CustomType>, EmitterCustom>);
 	}
 
-	SUBCASE("emit::validator::Never always returns false")
+	SUBCASE("Concept validation (Looseness)")
 	{
-		const emit::validator::Never<int32_t> intValidator{};
-		REQUIRE(intValidator.IsValid(123) == false);
-		REQUIRE(intValidator.IsValid(0) == false);
-		REQUIRE(intValidator.IsValid(-456) == false);
+		// These tests demonstrate that the concept as-written is *looser* // than the implementations. The concept allows lvalues (via const ref) 
+		// and pass-by-value, while the implementations only allow rvalues (&&).
+		// This is a potential design mismatch.
 
-		const emit::validator::Never<std::string> stringValidator{};
-		REQUIRE(stringValidator.IsValid("hello") == false);
-		REQUIRE(stringValidator.IsValid("") == false);
+		struct SampleTakesConstRef
+		{
+			using ValueType = int32_t;
+			bool PrePush(const ValueType&, const EmitterInt&) const
+			{
+				return true;
+			}
+		};
+		// This passes, because std::declval<int32_t>() (an rvalue) can bind to const&
+		static_assert(Preprocessable<SampleTakesConstRef, EmitterInt>);
+
+		struct SampleTakesByValue
+		{
+			using ValueType = int32_t;
+			bool PrePush(ValueType, const EmitterInt&) const
+			{
+				return true;
+			}
+		};
+		// This passes, because std::declval<int32_t>() (an rvalue) can move-construct the value parameter
+		static_assert(Preprocessable<SampleTakesByValue, EmitterInt>);
 	}
 
-	SUBCASE("emit::validator::Always always returns true")
+	SUBCASE("preprocess::Never always returns false and does not emit")
 	{
-		const emit::validator::Always<int32_t> intValidator{};
-		REQUIRE(intValidator.IsValid(123) == true);
-		REQUIRE(intValidator.IsValid(0) == true);
-		REQUIRE(intValidator.IsValid(-456) == true);
+		const preprocess::Never<int32_t> preprocessor{};
+		mock::Emitter<int32_t> mockEmitter{}; // Uses Emitter from emit::mock
 
-		const emit::validator::Always<std::string> stringValidator{};
-		REQUIRE(stringValidator.IsValid("hello") == true);
-		REQUIRE(stringValidator.IsValid("") == true);
+		bool result = preprocessor.PrePush(123, mockEmitter);
+
+		REQUIRE(result == false);
+		REQUIRE(mockEmitter.pushCallCount == 0); // Verify it never called the emitter
 	}
 
-	emit::WithLink<float, link::socket::Unicast<float, link::edge::Simple<float>>, emit::validator::Always<float>> emitter{ link::socket::Unicast<float, link::edge::Simple<float>>{}, emit::validator::Always<float>{} };
+	SUBCASE("preprocess::None forwards value and returns emitter's result")
+	{
+		const preprocess::None<int32_t> preprocessor{};
+		mock::Emitter<int32_t> mockEmitter{}; // Uses Emitter from emit::mock
+
+		SUBCASE("Emitter returns true")
+		{
+			mockEmitter.pushReturnValue = true;
+			bool result = preprocessor.PrePush(42, mockEmitter);
+
+			REQUIRE(result == true); // Check forwarded return value
+			REQUIRE(mockEmitter.pushCallCount == 1);
+		}
+
+		SUBCASE("Emitter returns false")
+		{
+			mockEmitter.pushReturnValue = false;
+			bool result = preprocessor.PrePush(99, mockEmitter);
+
+			REQUIRE(result == false); // Check forwarded return value
+			REQUIRE(mockEmitter.pushCallCount == 1);
+		}
+	}
+
+	SUBCASE("preprocess::None correctly moves move-only types")
+	{
+		using Ptr = std::unique_ptr<int32_t>;
+
+		const preprocess::None<Ptr> preprocessor{};
+		mock::MoveEmitter<Ptr> mockEmitter{}; // Uses MoveEmitter from emit::mock
+
+		auto myPayload = std::make_unique<int32_t>(789);
+
+		// Pass the rvalue to PrePush
+		bool result = preprocessor.PrePush(std::move(myPayload), mockEmitter);
+
+		REQUIRE(result == true);
+		REQUIRE(mockEmitter.pushCallCount == 1);
+
+		// Verify the original payload was moved from
+		REQUIRE(myPayload == nullptr);
+
+		// Verify the emitter received the correct value
+		REQUIRE(mockEmitter.lastPushedValue != nullptr);
+		REQUIRE(*mockEmitter.lastPushedValue == 789);
+	}
+	
+	Emitter<float, link::port::in::UnicastSimple<float>, emit::preprocess::None<float>> emitter{ link::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
+	//Sink<float, sink::Snapshot, link::port::out::UnicastSimple> sink{};
 	emitter.Push(67.0f);
 }
 

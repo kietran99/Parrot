@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cassert>
+#include <cstddef>
 #include <functional>
+#include <iterator>
 #include <memory>
-#include <optional>
+#include <numeric>
 #include <utility>
 
 /*
@@ -65,23 +67,14 @@ private:
 
 namespace parrot
 {
-template<class T, std::regular_invocable<T> Fn>
-	requires not std::same_as<std::invoke_result_t<Fn, T>, void>
-auto MapOrDefault(std::weak_ptr<T> weakPtr, Fn&& fn, std::invoke_result_t<Fn, T> defaultValue) -> std::invoke_result_t<Fn, T>
-{
-	if (auto strongPtr = weakPtr.lock())
-	{
-		return std::invoke(std::forward<Fn>(fn), *strongPtr);
-	}
-
-	return defaultValue;
-}
+template<class Fn, class Ret, class... Args>
+concept SignatureMatchInvocable = std::regular_invocable<Fn, Args...> and std::same_as<std::invoke_result_t<Fn, Args...>, Ret>;
 
 template<class C>
-concept Emittable = requires(C instance)
+concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C> and requires(C instance)
 {
 	typename C::ValueType;
-	{ instance.Push(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
+	typename C::LinkType;
 };
 
 template<class C, class T>
@@ -145,15 +138,23 @@ template<class C, class Sink>
 concept Postprocessable = requires(C instance, const Sink& sink)
 {
 	typename C::ValueType;
+	requires SinkableOf<Sink, typename C::ValueType>;
 	{ instance.PostInvoke(std::declval<typename C::ValueType>(), sink) } -> std::same_as<bool>;
 };
 
+//namespace postprocess
+//{
 template<class T>
 struct None
 {
 	using ValueType = T;
 
 	void Receive(T) const {}
+
+	constexpr bool PostInvoke(ValueType&& value, const Sinkable auto& sinker) const
+	{
+		return sinker.Receive(std::move(value));
+	}
 };
 
 template<class T>
@@ -174,9 +175,15 @@ public:
 		value = std::move(newValue);
 	}
 
+	constexpr bool PostInvoke(ValueType&& value, const Sinkable auto& sinker) const
+	{
+		return sinker.Receive(std::move(value));
+	}
+
 private:
 	mutable T value;
 };
+//}
 }
 
 
@@ -194,8 +201,6 @@ concept LinkableOf = Linkable<C> and std::same_as<typename C::ValueType, T>;
 
 namespace link
 {
-namespace edge
-{
 template<class T>
 class Simple
 {
@@ -203,81 +208,164 @@ public:
 	using ValueType = T;
 	using NextFn = std::function<bool(ValueType&&)>;
 
-	constexpr Simple(const SinkableOf<ValueType> auto& sink)
-		: next(std::bind(&decltype(sink)::Receive, sink, std::placeholders::_1))
-		//: next([sink](ValueType&& value) { sink.Receive(std::move(value)); return true; })
+	constexpr Simple(SignatureMatchInvocable<bool, ValueType&&> auto&& fn)
+		: m_next(std::forward<decltype(fn)>(fn))
 	{}
 
 	constexpr bool Push(ValueType&& value) const
 	{
-		assert(next != nullptr);
-		return std::invoke(next, std::move(value));
+		assert(m_next != nullptr);
+		return std::invoke(m_next, std::move(value));
 	}
 
 private:
-	NextFn next;
+	NextFn m_next;
 };
 }
 
-namespace port
+
+
+
+namespace emit
 {
-namespace in
-{
-template<class T, LinkableOf<T> Link>
+template<class T, template<class> class Link>
+	requires Linkable<Link<T>>
 class Unicast
 {
 public:
 	using ValueType = T;
-	using LinkType = Link;
+	using LinkType = Link<T>;
 
-	constexpr bool Push(ValueType&& value) const
+	class Iterator
 	{
-		return MapOrDefault(m_optLink, [&value](const LinkType& link) { return link.Push(std::move(value)); }, false);
-	}
+	public:
+		using iterator_category = std::forward_iterator_tag;
+		using difference_type = std::ptrdiff_t;
+		using value_type = LinkType;
+
+		Iterator() : m_weakLink() {}
+		Iterator(std::weak_ptr<LinkType> weakLink) : m_weakLink(weakLink) {}
+
+		const value_type& operator*() const { return *m_weakLink.lock(); }
+		const value_type* operator->() const { return m_weakLink.lock().get(); }
+
+		Iterator& operator++()
+		{
+			m_weakLink.reset();
+			return *this;
+		}
+
+		Iterator operator++(int)
+		{
+			Iterator temp = *this;
+			m_weakLink.reset();
+			return temp;
+		}
+
+		friend bool operator==(const Iterator& a, const Iterator& b) { return a.m_weakLink.lock() == b.m_weakLink.lock(); }
+		friend bool operator!=(const Iterator& a, const Iterator& b) { return a.m_weakLink.lock() != b.m_weakLink.lock(); }
+
+	private:
+		std::weak_ptr<LinkType> m_weakLink;
+	};
+
+	static_assert(std::forward_iterator<Iterator>);
+
+	Unicast()
+		: m_optWeakLink()
+	{}
+
+	Iterator begin() const { return cbegin(); }
+	Iterator end() const { return cend(); }
+	Iterator cbegin() const { return Iterator{ m_optWeakLink }; }
+	Iterator cend() const { return Iterator{ }; }
+
+	constexpr size_t size() const { return m_optWeakLink.expired() ? 0 : 1; }
+	constexpr bool empty() const { return m_optWeakLink.expired(); }
 
 	constexpr void Connect(std::weak_ptr<LinkType> link) const
 	{
 		assert(!link.expired());
-		m_optLink = link;
+		m_optWeakLink = link;
 	}
 
 private:
-	mutable std::weak_ptr<LinkType> m_optLink;
+	mutable std::weak_ptr<LinkType> m_optWeakLink;
 };
 
 template<class T>
-using UnicastSimple = Unicast<T, edge::Simple<T>>;
+using UnicastSimple = Unicast<T, link::Simple>;
 }
 
-namespace out
+template<class T, EmittableOf<T> Emitter>
+constexpr bool operator|(T&& value, const Emitter& emitter)
 {
-template<class T, LinkableOf<T> Link>
+	return emitter.empty() ? false : std::ranges::fold_left(emitter, true, [&value](bool acc, const auto& link)
+	{
+		return acc && link.Push(std::remove_cvref_t<T>(value));
+	});
+}
+
+
+
+
+namespace sink
+{
+template<class T, template<class> class Link>
+	requires Linkable<Link<T>>
 class Unicast
 {
 public:
 	using ValueType = T;
-	using LinkType = Link;
+	using LinkType = Link<T>;
+
+	Unicast(const EmittableOf<ValueType> auto& emitter, SignatureMatchInvocable<bool, ValueType&&> auto&& handler)
+		: m_link(NewLink(emitter, std::forward<decltype(handler)>(handler)))
+	{}
+
+	std::shared_ptr<LinkType> NewLink(const EmittableOf<ValueType> auto& emitter, SignatureMatchInvocable<bool, ValueType&&> auto&& handler) const
+	{
+		auto link = std::make_shared<LinkType>(std::forward<decltype(handler)>(handler));
+		emitter.Connect(link);
+		return link;
+	}
 
 	constexpr bool Receive(ValueType&& value) const
 	{
-		return std::invoke(m_handler, std::move(value));
-	}
-
-	constexpr void Connect(std::shared_ptr<LinkType> link) const
-	{
-		assert(link != nullptr);
-		m_link = link;
+		//return std::invoke(m_handler, std::move(value));
+		return false;
 	}
 
 private:
-	mutable std::shared_ptr<Link> m_link;
-	std::function<bool(ValueType&&)> m_handler;
+	std::shared_ptr<LinkType> m_link;
 };
 
 template<class T>
-using UnicastSimple = Unicast<T, edge::Simple<T>>;
+using UnicastSimple = Unicast<T, link::Simple>;
 }
+
+namespace op
+{
+template<class Fn>
+struct Sink
+{
+	constexpr Sink(Fn&& fn)
+		: func(std::forward<Fn>(fn))
+	{}
+
+	constexpr bool operator()(auto&& value) const
+	{
+		return std::invoke(func, std::forward<decltype(value)>(value));
+	}
+
+	Fn func;
+};
 }
+
+template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> Operation>
+[[nodiscard]] constexpr auto operator|(const Emitter& emitter, op::Sink<Operation>&& operation)
+{
+	return sink::UnicastSimple<typename Emitter::ValueType>{ emitter, std::forward<op::Sink<Operation>>(operation) };
 }
 
 
@@ -285,78 +373,55 @@ using UnicastSimple = Unicast<T, edge::Simple<T>>;
 
 //template<class T, template<class> class PortIn, template<class> class Preprocessor>
 //	requires Emittable<PortIn<T>>
-//		and emit::Preprocessable<Preprocessor<T>>
+//		and emit::Preprocessable<Preprocessor<T>, PortIn<T>>
 //		and std::same_as<typename Preprocessor<T>::ValueType, typename PortIn<T>::ValueType>
-//struct Emitter
+//class Emitter
 //{
+//public:
 //	using ValueType = T;
 //
 //	constexpr Emitter(PortIn<T>&& port, Preprocessor<T>&& preprocessor)
 //		: m_port(port)
 //		, m_preprocessor(preprocessor)
-//	{
-//	}
+//	{}
 //
 //	constexpr bool Push(ValueType value) const
 //	{
-//		return Emit(std::move(value), m_port, m_preprocessor);
+//		return m_preprocessor.PrePush(std::move(value), m_port);
 //	}
 //
+//private:
 //	PortIn<T> m_port;
 //	Preprocessor<T> m_preprocessor;
 //};
-
-template<class T, Emittable PortIn, emit::Preprocessable<PortIn> Preprocessor>
-	requires std::same_as<typename PortIn::ValueType, T>
-		and std::same_as<typename Preprocessor::ValueType, T>
-		and std::same_as<typename Preprocessor::ValueType, typename PortIn::ValueType>
-class Emitter
-{
-public:
-	using ValueType = T;
-
-	constexpr Emitter(PortIn&& port, Preprocessor&& preprocessor)
-		: m_port(port)
-		, m_preprocessor(preprocessor)
-	{
-	}
-
-	constexpr bool Push(ValueType value) const
-	{
-		return m_preprocessor.PrePush(std::move(value), m_port);
-	}
-
-private:
-	PortIn m_port;
-	Preprocessor m_preprocessor;
-};
-
-
-
-
-template<class T, template<class> class Postprocessor, template<class> class PortOut>
-	requires sink::Postprocessable<Postprocessor<T>, PortOut>
-		and Sinkable<PortOut<T>>
-		and std::same_as<typename PortOut<T>::ValueType, typename Postprocessor<T>::ValueType>
-class Sink
-{
-public:
-	using ValueType = T;
-
-	Sink(PortOut<T>&& port, Postprocessor<T>&& postprocessor)
-		: m_port(port)
-		, m_postprocessor(postprocessor)
-	{}
-
-	constexpr bool operator()(ValueType&& value) const
-	{
-		//return m_postprocessor.PostInvoke(std::move(value), m_port);
-	}
-
-private:
-	PortOut<T> m_port;
-	Postprocessor<T> m_postprocessor;
-};
+//
+//
+//
+//
+//template<class T, template<class> class PortOut, template<class> class Postprocessor>
+//	requires Sinkable<PortOut<T>>
+//		and sink::Postprocessable<Postprocessor<T>, PortOut<T>>
+//		and std::same_as<typename PortOut<T>::ValueType, typename Postprocessor<T>::ValueType>
+//class Sink
+//{
+//public:
+//	using ValueType = T;
+//
+//	Sink(PortOut<T>&& port, Postprocessor<T>&& postprocessor)
+//		: m_port(port)
+//		, m_postprocessor(postprocessor)
+//	{}
+//
+//	constexpr bool operator()(ValueType&& value) const
+//	{
+//		//return m_postprocessor.PostInvoke(std::move(value), m_port);
+//		return false;
+//	}
+//
+//private:
+//	PortOut<T> m_port;
+//	Postprocessor<T> m_postprocessor;
+//};
 
 
 

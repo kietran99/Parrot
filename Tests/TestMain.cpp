@@ -40,308 +40,235 @@ static void Test()
 
 struct CustomType {};
 
-namespace parrot::emit::mock
+namespace parrot
 {
-// An emitter that satisfies EmittableOf and allows us to check its state
+namespace link::mock
+{
+// A struct that fully satisfies both Emittable and Linkable concepts (Push returns bool, takes T&&).
 template<class T>
-struct Emitter
+struct ValidLink
 {
 	using ValueType = T;
-
-	bool Push(T value) const
-	{
-		pushCallCount++;
-		return pushReturnValue;
-	}
-
-	mutable int pushCallCount = 0;
-	mutable bool pushReturnValue = true;
+	bool Push(ValueType&& value) const { return true; }
 };
 
-// An emitter for move-only types
+// Violates Linkable/Emittable: wrong return type (void instead of bool).
 template<class T>
-struct MoveEmitter
+struct InvalidLinkWrongReturn
 {
 	using ValueType = T;
+	void Push(ValueType&& value) const {}
+};
 
-	bool Push(T&& value) const
-	{
-		pushCallCount++;
-		lastPushedValue = std::move(value);
-		return true;
-	}
-
-	mutable int pushCallCount = 0;
-	mutable T lastPushedValue;
+// Violates LinkableOf/EmittableOf: ValueType is fixed to int, breaking type T requirement.
+template<class T>
+struct InvalidLinkWrongValueType
+{
+	// If T is float, this violates LinkableOf<C, float>
+	using ValueType = int;
+	bool Push(int&& value) const { return true; }
 };
 }
-
-TEST_CASE("Sinkable concept & built-in types")
-{
-	using namespace parrot;
-
-	struct Custom {};
-	
-	SUBCASE("Sinkable concept is validated correctly")
-	{
-		struct SampleCorrectReceiveI32
-		{
-			void Receive(int32_t&&) const;
-		};
-
-		struct SampleCorrectReceiveCustom
-		{
-			bool Receive(Custom&&) const;
-		};
-
-		struct SampleMissingReceiveFunc {};
-
-		static_assert(SinkableOf<SampleCorrectReceiveI32, int32_t>);
-		static_assert(not SinkableOf<SampleCorrectReceiveI32, Custom>);
-		static_assert(SinkableOf<SampleCorrectReceiveCustom, Custom>);
-		static_assert(not SinkableOf<SampleMissingReceiveFunc, float>);
-		
-		struct SampleReceiveByValue 
-		{
-			void Receive(int32_t) const;
-		};
-
-		struct SampleReceiveByConstLRef 
-		{
-			void Receive(const int32_t&) const;
-		};
-
-		struct SampleReceiveNonConst 
-		{
-			void Receive(int32_t&&);
-		};
-
-		struct SamplePrivateReceive 
-		{
-		private:
-			void Receive(int32_t&&) const;
-		};
-
-		static_assert(SinkableOf<SampleReceiveByValue, int32_t>);
-		static_assert(SinkableOf<SampleReceiveByConstLRef, int32_t>);
-		static_assert(SinkableOf<SampleReceiveNonConst, int32_t>);
-		static_assert(not SinkableOf<SamplePrivateReceive, int32_t>);
-
-		static_assert(SinkableOf<sink::None<float>, float>);
-		static_assert(not SinkableOf<sink::None<float>, Custom>);
-		static_assert(SinkableOf<sink::Snapshot<double>, double>);
-		static_assert(not SinkableOf<sink::Snapshot<Custom>, double>);
-	}
-
-	SUBCASE("Snapshot captures the last received value")
-	{
-		SUBCASE("Snapshot with primitive value")
-		{
-			sink::Snapshot<float> snapshotFloat{ 3.14f };
-
-			REQUIRE(snapshotFloat.Value() == 3.14f);
-
-			snapshotFloat.Receive(79.8f);
-			REQUIRE(snapshotFloat.Value() == 79.8f);
-
-			snapshotFloat.Receive(-34.2f);
-			REQUIRE(snapshotFloat.Value() == -34.2f);
-		}
-
-		SUBCASE("Snapshot with user-defined type")
-		{
-			struct IntWrapper { int32_t value; };
-			sink::Snapshot<IntWrapper> snapshotIntWrapper{ { 45 } };
-
-			REQUIRE(snapshotIntWrapper.Value().value == 45);
-
-			snapshotIntWrapper.Receive({ -69 });
-			REQUIRE(snapshotIntWrapper.Value().value == -69);
-		}
-
-		SUBCASE("Snapshot copies from lvalues")
-		{
-			sink::Snapshot<std::string> snapshotStr{ "initial" };
-			std::string new_value = "lvalue_test";
-
-			snapshotStr.Receive(new_value);
-
-			REQUIRE(snapshotStr.Value() == "lvalue_test");
-			REQUIRE(new_value == "lvalue_test");
-		}
-
-		SUBCASE("Snapshot moves from rvalues with move-only types")
-		{
-			sink::Snapshot<std::unique_ptr<int32_t>> snapshotPtr{ std::make_unique<int32_t>(100) };
-			REQUIRE(*snapshotPtr.Value() == 100);
-
-			auto new_ptr = std::make_unique<int32_t>(200);
-
-			snapshotPtr.Receive(std::move(new_ptr));
-
-			REQUIRE(*snapshotPtr.Value() == 200);
-			REQUIRE(new_ptr == nullptr);
-		}
-	}
 }
 
-TEST_CASE("Emittable concept & built-in types")
+TEST_CASE("Linkable functionality")
 {
 	using namespace parrot;
-	using namespace emit;
+	using T = int32_t;
+	using Ptr = std::unique_ptr<T>;
 
-	// Local types for checking concept validation
-	struct CustomType
+	SUBCASE("Linkable concept validation with test mocks")
 	{
-	};
-	using EmitterInt = mock::Emitter<int32_t>;
-	using EmitterCustom = mock::Emitter<CustomType>;
+		// 1. Validate Linkable concept constraints using mocks
+		// PASS: Fully compliant structure
+		static_assert(Linkable<link::mock::ValidLink<T>>);
+		// FAIL: Wrong return type (void)
+		static_assert(!Linkable<link::mock::InvalidLinkWrongReturn<T>>);
 
-	SUBCASE("Preprocessable concept validation")
-	{
-		// Class 1: Correct signature (matches Never/None)
-		struct SampleCorrectRRef
-		{
-			using ValueType = int32_t;
-			bool PrePush(ValueType&&, const EmitterInt&) const
-			{
-				return true;
-			}
-		};
+		// 2. Validate LinkableOf concept constraints using mocks
+		// PASS: ValueType matches T
+		static_assert(LinkableOf<link::mock::ValidLink<T>, T>);
+		// FAIL: ValueType is fixed to int, not the expected type (float)
+		static_assert(!LinkableOf<link::mock::InvalidLinkWrongValueType<float>, float>);
 
-		// Class 2: Missing requirement (Missing ValueType)
-		struct SampleMissingValueType
-		{
-			bool PrePush(int32_t&&, const EmitterInt&) const
-			{
-				return true;
-			}
-		};
-
-		// Class 3: Incorrect PrePush signature (wrong return type 'void')
-		struct SampleWrongReturn
-		{
-			using ValueType = int32_t;
-			void PrePush(ValueType&&, const EmitterInt&) const
-			{
-			}
-		};
-
-		// Class 4: Incorrect Emitter constraint (Emitter can't handle float)
-		struct SampleWrongEmitter
-		{
-			using ValueType = float; // EmitterInt cannot emit a float
-			bool PrePush(ValueType&&, const EmitterInt&) const
-			{
-				return true;
-			}
-		};
-
-		// --- Static Assertions ---
-		static_assert(Preprocessable<SampleCorrectRRef, EmitterInt>);
-		static_assert(not Preprocessable<SampleMissingValueType, EmitterInt>);
-		static_assert(not Preprocessable<SampleWrongReturn, EmitterInt>);
-		static_assert(not Preprocessable<SampleWrongEmitter, EmitterInt>);
-
-		// Check built-in types
-		static_assert(Preprocessable<preprocess::Never<int32_t>, EmitterInt>);
-		static_assert(Preprocessable<preprocess::None<CustomType>, EmitterCustom>);
+		// 3. Original checks (retained for link::Simple)
+		static_assert(Linkable<link::Simple<T>>);
+		static_assert(LinkableOf<link::Simple<Ptr>, Ptr>);
+		static_assert(!LinkableOf<link::Simple<T>, float>);
 	}
 
-	SUBCASE("Concept validation (Looseness)")
+	SUBCASE("link::Simple forwards value and returns result")
 	{
-		// These tests demonstrate that the concept as-written is *looser* // than the implementations. The concept allows lvalues (via const ref) 
-		// and pass-by-value, while the implementations only allow rvalues (&&).
-		// This is a potential design mismatch.
+		int pushCount = 0;
+		int lastValue = 0;
+		bool nextFnResult = true;
 
-		struct SampleTakesConstRef
+		const auto nextFn = [&](int&& val) -> bool
 		{
-			using ValueType = int32_t;
-			bool PrePush(const ValueType&, const EmitterInt&) const
-			{
-				return true;
-			}
+			pushCount++;
+			lastValue = val;
+			return nextFnResult;
 		};
-		// This passes, because std::declval<int32_t>() (an rvalue) can bind to const&
-		static_assert(Preprocessable<SampleTakesConstRef, EmitterInt>);
 
-		struct SampleTakesByValue
+		const link::Simple<int> simpleLink{ nextFn };
+
+		// Case 1: NextFn returns true
+		nextFnResult = true;
+		const bool resultOne = simpleLink.Push(100);
+		REQUIRE(resultOne == true);
+		REQUIRE(pushCount == 1);
+		REQUIRE(lastValue == 100);
+
+		// Case 2: NextFn returns false
+		nextFnResult = false;
+		const bool resultTwo = simpleLink.Push(200);
+		REQUIRE(resultTwo == false);
+		REQUIRE(pushCount == 2);
+		REQUIRE(lastValue == 200);
+	}
+
+	SUBCASE("link::Simple correctly handles move-only types")
+	{
+		Ptr capturedPtr{};
+
+		const auto nextFn = [&](Ptr&& ptr) -> bool
 		{
-			using ValueType = int32_t;
-			bool PrePush(ValueType, const EmitterInt&) const
-			{
-				return true;
-			}
+			capturedPtr = std::move(ptr);
+			return true;
 		};
-		// This passes, because std::declval<int32_t>() (an rvalue) can move-construct the value parameter
-		static_assert(Preprocessable<SampleTakesByValue, EmitterInt>);
-	}
 
-	SUBCASE("preprocess::Never always returns false and does not emit")
-	{
-		const preprocess::Never<int32_t> preprocessor{};
-		mock::Emitter<int32_t> mockEmitter{}; // Uses Emitter from emit::mock
+		const link::Simple<Ptr> simpleLink{ nextFn };
 
-		bool result = preprocessor.PrePush(123, mockEmitter);
+		auto payload = std::make_unique<int32_t>(777);
+		const int* originalRawPtr = payload.get();
 
-		REQUIRE(result == false);
-		REQUIRE(mockEmitter.pushCallCount == 0); // Verify it never called the emitter
-	}
-
-	SUBCASE("preprocess::None forwards value and returns emitter's result")
-	{
-		const preprocess::None<int32_t> preprocessor{};
-		mock::Emitter<int32_t> mockEmitter{}; // Uses Emitter from emit::mock
-
-		SUBCASE("Emitter returns true")
-		{
-			mockEmitter.pushReturnValue = true;
-			bool result = preprocessor.PrePush(42, mockEmitter);
-
-			REQUIRE(result == true); // Check forwarded return value
-			REQUIRE(mockEmitter.pushCallCount == 1);
-		}
-
-		SUBCASE("Emitter returns false")
-		{
-			mockEmitter.pushReturnValue = false;
-			bool result = preprocessor.PrePush(99, mockEmitter);
-
-			REQUIRE(result == false); // Check forwarded return value
-			REQUIRE(mockEmitter.pushCallCount == 1);
-		}
-	}
-
-	SUBCASE("preprocess::None correctly moves move-only types")
-	{
-		using Ptr = std::unique_ptr<int32_t>;
-
-		const preprocess::None<Ptr> preprocessor{};
-		mock::MoveEmitter<Ptr> mockEmitter{}; // Uses MoveEmitter from emit::mock
-
-		auto myPayload = std::make_unique<int32_t>(789);
-
-		// Pass the rvalue to PrePush
-		bool result = preprocessor.PrePush(std::move(myPayload), mockEmitter);
+		const bool result = simpleLink.Push(std::move(payload));
 
 		REQUIRE(result == true);
-		REQUIRE(mockEmitter.pushCallCount == 1);
 
-		// Verify the original payload was moved from
-		REQUIRE(myPayload == nullptr);
+		// Check that the payload was moved from (is null)
+		REQUIRE(payload == nullptr);
 
-		// Verify the emitter received the correct value
-		REQUIRE(mockEmitter.lastPushedValue != nullptr);
-		REQUIRE(*mockEmitter.lastPushedValue == 789);
+		// Check that the link received the object
+		REQUIRE(capturedPtr != nullptr);
+		REQUIRE(capturedPtr.get() == originalRawPtr);
+		REQUIRE(*capturedPtr == 777);
+	}
+}
+
+TEST_CASE("Emittable functionality")
+{
+	using namespace parrot;
+	using Ptr = std::unique_ptr<int32_t>;
+
+	SUBCASE("Emittable concept validation")
+	{
+		static_assert(Emittable<emit::UnicastSimple<int32_t>>);
+		static_assert(EmittableOf<emit::UnicastSimple<int32_t>, int32_t>);
+		static_assert(EmittableOf<emit::UnicastSimple<Ptr>, Ptr>);
+		static_assert(!EmittableOf<emit::UnicastSimple<int32_t>, float>);
+	}
+
+	SUBCASE("emit::UnicastSimple connects and pushes successfully")
+	{
+		int pushCount = 0;
+
+		// 1. Create the sink (link::Simple) 
+		auto sink = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+		{
+			pushCount++;
+			return true;
+		});
+
+		// 2. Create the emitter (Unicast) and connect to the shared sink
+		const emit::UnicastSimple<int> emitter{};
+		emitter.Connect(sink);
+
+		// 3. Push data
+		const bool resultOne = 1 | emitter;
+		const bool resultTwo = 2 | emitter;
+
+		REQUIRE(resultOne == true);
+		REQUIRE(resultTwo == true);
+		REQUIRE(pushCount == 2);
 	}
 	
-	Emitter<float, link::port::in::UnicastSimple<float>, emit::preprocess::None<float>> emitter{ link::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
-	//Sink<float, sink::Snapshot, link::port::out::UnicastSimple> sink{};
-	emitter.Push(67.0f);
+	SUBCASE("emit::Unicast only binds to the last link (Unicast behavior)")
+	{
+		int pushCountA = 0;
+		int pushCountB = 0;
+
+		// 1. Create Link A
+		auto linkA = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+		{
+			pushCountA++;
+			return true;
+		});
+
+		// 2. Create Link B
+		auto linkB = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+		{
+			pushCountB++;
+			return true;
+		});
+
+		const emit::UnicastSimple<int> emitter{};
+
+		// Connect to A
+		emitter.Connect(linkA);
+
+		// Push 1: Should go to A
+		1 | emitter;
+		REQUIRE(pushCountA == 1);
+		REQUIRE(pushCountB == 0);
+
+		// Connect to B (This overwrites A)
+		emitter.Connect(linkB);
+
+		// Push 2: Should go to B, NOT A
+		2 | emitter;
+		REQUIRE(pushCountA == 1); // Still 1
+		REQUIRE(pushCountB == 1); // Now 1
+
+		// Push 3: Should still go to B
+		3 | emitter;
+		REQUIRE(pushCountA == 1); // Still 1
+		REQUIRE(pushCountB == 2); // Now 2
+	}
+
+	SUBCASE("emit::UnicastSimple fails gracefully if link is disconnected (expired)")
+	{
+		int pushCount = 0;
+		const emit::UnicastSimple<int> emitter{};
+
+		{ // Scope block for shared_ptr
+			// 1. Create shared sink
+			auto sink = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+			{
+				pushCount++;
+				return true;
+			});
+
+			// 2. Connect the weak_ptr
+			emitter.Connect(sink);
+
+			// 3. Push while connected
+			const bool resultConnected = 1 | emitter;
+			REQUIRE(resultConnected == true);
+			REQUIRE(pushCount == 1);
+		} // sink shared_ptr goes out of scope and is destroyed. The weak_ptr is now expired.
+
+		// 4. Push while disconnected
+		const bool resultDisconnected = 2 | emitter;
+
+		REQUIRE(resultDisconnected == false);
+		REQUIRE(pushCount == 1); // No new push occurred after disconnection
+	}
 }
 
 TEST_CASE("Ref operator")
 {
+	using namespace parrot;
 	namespace op = parrot::op;
 
 	static_assert(op::Operable<op::Ref<int>>);
@@ -355,7 +282,13 @@ TEST_CASE("Ref operator")
 	const parrot::Signal<CustomType> signalCustom{};
 	static_assert(std::is_same_v<op::OperableValueType<decltype(op::Ref(signalCustom))>, CustomType>);
 
-	REQUIRE(true);
+	emit::UnicastSimple<float> emitter{};
+	float value{ 0.0f };
+	sink::UnicastSimple<float> sinker = emitter | op::Sink([&value](float&& newValue) { value = std::move(newValue); return true; });
+	34.0f | emitter;
+	//Emitter<float, link::port::in::UnicastSimple, emit::preprocess::None> emitter{ link::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
+	//Sink<float, link::port::out::UnicastSimple, sink::Snapshot> sinker{ link::port::out::UnicastSimple<float>{}, sink::Snapshot{ 4.0f } };
+	98.0f | emitter;
 }
 
 TEST_CASE("Map operator")

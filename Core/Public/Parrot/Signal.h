@@ -347,9 +347,9 @@ using UnicastSimple = Unicast<T, link::Simple>;
 namespace op
 {
 template<class Fn>
-struct Sink
+struct Effect
 {
-	constexpr Sink(Fn&& fn)
+	constexpr Effect(Fn&& fn)
 		: func(std::forward<Fn>(fn))
 	{}
 
@@ -363,9 +363,9 @@ struct Sink
 }
 
 template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> Operation>
-[[nodiscard]] constexpr auto operator>>(const Emitter& emitter, op::Sink<Operation>&& operation)
+[[nodiscard]] constexpr auto operator|(const Emitter& emitter, op::Effect<Operation>&& operation)
 {
-	return sink::UnicastSimple<typename Emitter::ValueType>{ emitter, std::forward<op::Sink<Operation>>(operation) };
+	return sink::UnicastSimple<typename Emitter::ValueType>{ emitter, std::forward<op::Effect<Operation>>(operation) };
 }
 
 

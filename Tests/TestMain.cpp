@@ -280,13 +280,15 @@ TEST_CASE("Ref operator")
 	const parrot::Signal<CustomType> signalCustom{};
 	static_assert(std::is_same_v<op::OperableValueType<decltype(op::Ref(signalCustom))>, CustomType>);
 
-	emit::UnicastSimple<float> emitter{};
-	float value{ 0.0f };
-	sink::UnicastSimple<float> sinker = emitter >> op::Sink([&value](float&& newValue) { value = std::move(newValue); return true; });
-	emitter << 34.0f;
 	//Emitter<float, link::port::in::UnicastSimple, emit::preprocess::None> emitter{ link::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
 	//Sink<float, link::port::out::UnicastSimple, sink::Snapshot> sinker{ link::port::out::UnicastSimple<float>{}, sink::Snapshot{ 4.0f } };
+	emit::UnicastSimple<float> emitter{};
+	float value{ 0.0f };
+	sink::UnicastSimple<float> sinker = emitter | op::Effect([&value](float&& newValue) { value = std::move(newValue); return true; });
+	emitter << 34.0f;
+	REQUIRE(value == 34.0f);
 	emitter << 98.0f;
+	REQUIRE(value == 98.0f);
 }
 
 TEST_CASE("Map operator")

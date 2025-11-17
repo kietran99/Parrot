@@ -80,42 +80,6 @@ concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C
 template<class C, class T>
 concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
 
-namespace emit
-{
-template<class C, class Emitter>
-concept Preprocessable = requires(C instance, const Emitter& emitter)
-{
-	typename C::ValueType;
-	requires EmittableOf<Emitter, typename C::ValueType>;
-	{ instance.PrePush(std::declval<typename C::ValueType>(), emitter) } -> std::same_as<bool>;
-};
-
-namespace preprocess
-{
-template<class T>
-struct Never
-{
-	using ValueType = T;
-
-	constexpr bool PrePush(ValueType&& value, const Emittable auto& emitter) const
-	{
-		return false;
-	}
-};
-
-template<class T>
-struct None
-{
-	using ValueType = T;
-
-	constexpr bool PrePush(ValueType&& value, const Emittable auto& emitter) const
-	{
-		return emitter.Push(std::move(value));
-	}
-};
-}
-}
-
 
 
 
@@ -131,60 +95,6 @@ concept SinkableOf = requires(C instance)
 {
 	{ instance.Receive(std::declval<TIn>()) };
 };
-
-namespace sink
-{
-template<class C, class Sink>
-concept Postprocessable = requires(C instance, const Sink& sink)
-{
-	typename C::ValueType;
-	requires SinkableOf<Sink, typename C::ValueType>;
-	{ instance.PostInvoke(std::declval<typename C::ValueType>(), sink) } -> std::same_as<bool>;
-};
-
-//namespace postprocess
-//{
-template<class T>
-struct None
-{
-	using ValueType = T;
-
-	void Receive(T) const {}
-
-	constexpr bool PostInvoke(ValueType&& value, const Sinkable auto& sinker) const
-	{
-		return sinker.Receive(std::move(value));
-	}
-};
-
-template<class T>
-class Snapshot
-{
-public:
-	using ValueType = T;
-
-	Snapshot(T&& initValue)
-		: value(std::move(initValue))
-	{
-	}
-
-	constexpr const T& Value() const { return value; }
-
-	constexpr void Receive(T newValue) const
-	{
-		value = std::move(newValue);
-	}
-
-	constexpr bool PostInvoke(ValueType&& value, const Sinkable auto& sinker) const
-	{
-		return sinker.Receive(std::move(value));
-	}
-
-private:
-	mutable T value;
-};
-//}
-}
 
 
 
@@ -371,57 +281,8 @@ template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> 
 
 
 
-//template<class T, template<class> class PortIn, template<class> class Preprocessor>
-//	requires Emittable<PortIn<T>>
-//		and emit::Preprocessable<Preprocessor<T>, PortIn<T>>
-//		and std::same_as<typename Preprocessor<T>::ValueType, typename PortIn<T>::ValueType>
-//class Emitter
-//{
-//public:
-//	using ValueType = T;
-//
-//	constexpr Emitter(PortIn<T>&& port, Preprocessor<T>&& preprocessor)
-//		: m_port(port)
-//		, m_preprocessor(preprocessor)
-//	{}
-//
-//	constexpr bool Push(ValueType value) const
-//	{
-//		return m_preprocessor.PrePush(std::move(value), m_port);
-//	}
-//
-//private:
-//	PortIn<T> m_port;
-//	Preprocessor<T> m_preprocessor;
-//};
-//
-//
-//
-//
-//template<class T, template<class> class PortOut, template<class> class Postprocessor>
-//	requires Sinkable<PortOut<T>>
-//		and sink::Postprocessable<Postprocessor<T>, PortOut<T>>
-//		and std::same_as<typename PortOut<T>::ValueType, typename Postprocessor<T>::ValueType>
-//class Sink
-//{
-//public:
-//	using ValueType = T;
-//
-//	Sink(PortOut<T>&& port, Postprocessor<T>&& postprocessor)
-//		: m_port(port)
-//		, m_postprocessor(postprocessor)
-//	{}
-//
-//	constexpr bool operator()(ValueType&& value) const
-//	{
-//		//return m_postprocessor.PostInvoke(std::move(value), m_port);
-//		return false;
-//	}
-//
-//private:
-//	PortOut<T> m_port;
-//	Postprocessor<T> m_postprocessor;
-//};
+
+
 
 
 

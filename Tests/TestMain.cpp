@@ -30,9 +30,7 @@ static void Test()
 	constexpr auto iotaView = std::views::iota(1u);
 
 	auto x = arr | transformView;
-	auto y = filterView | transformView;
-	auto wer = y(arr);
-	auto z = arr | y;
+	auto y = arr | transformView | filterView;
 	
 	//auto x = std::ranges::fold_left(arr, 0, [](int count, uint64_t key) { return count + 1; });
 	//auto foldpState = parrot::Foldp([](uint64_t key, uint32_t count) { return count + 1; }, 0u);
@@ -185,8 +183,8 @@ TEST_CASE("Emittable functionality")
 		emitter.Connect(sink);
 
 		// 3. Push data
-		const bool resultOne = 1 | emitter;
-		const bool resultTwo = 2 | emitter;
+		const bool resultOne = emitter << 1;
+		const bool resultTwo = emitter << 2;
 
 		REQUIRE(resultOne == true);
 		REQUIRE(resultTwo == true);
@@ -218,7 +216,7 @@ TEST_CASE("Emittable functionality")
 		emitter.Connect(linkA);
 
 		// Push 1: Should go to A
-		1 | emitter;
+		emitter << 1;
 		REQUIRE(pushCountA == 1);
 		REQUIRE(pushCountB == 0);
 
@@ -226,12 +224,12 @@ TEST_CASE("Emittable functionality")
 		emitter.Connect(linkB);
 
 		// Push 2: Should go to B, NOT A
-		2 | emitter;
+		emitter << 2;
 		REQUIRE(pushCountA == 1); // Still 1
 		REQUIRE(pushCountB == 1); // Now 1
 
 		// Push 3: Should still go to B
-		3 | emitter;
+		emitter << 3;
 		REQUIRE(pushCountA == 1); // Still 1
 		REQUIRE(pushCountB == 2); // Now 2
 	}
@@ -253,13 +251,13 @@ TEST_CASE("Emittable functionality")
 			emitter.Connect(sink);
 
 			// 3. Push while connected
-			const bool resultConnected = 1 | emitter;
+			const bool resultConnected = emitter << 1;
 			REQUIRE(resultConnected == true);
 			REQUIRE(pushCount == 1);
 		} // sink shared_ptr goes out of scope and is destroyed. The weak_ptr is now expired.
 
 		// 4. Push while disconnected
-		const bool resultDisconnected = 2 | emitter;
+		const bool resultDisconnected = emitter << 2;
 
 		REQUIRE(resultDisconnected == false);
 		REQUIRE(pushCount == 1); // No new push occurred after disconnection
@@ -284,11 +282,11 @@ TEST_CASE("Ref operator")
 
 	emit::UnicastSimple<float> emitter{};
 	float value{ 0.0f };
-	sink::UnicastSimple<float> sinker = emitter | op::Sink([&value](float&& newValue) { value = std::move(newValue); return true; });
-	34.0f | emitter;
+	sink::UnicastSimple<float> sinker = emitter >> op::Sink([&value](float&& newValue) { value = std::move(newValue); return true; });
+	emitter << 34.0f;
 	//Emitter<float, link::port::in::UnicastSimple, emit::preprocess::None> emitter{ link::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
 	//Sink<float, link::port::out::UnicastSimple, sink::Snapshot> sinker{ link::port::out::UnicastSimple<float>{}, sink::Snapshot{ 4.0f } };
-	98.0f | emitter;
+	emitter << 98.0f;
 }
 
 TEST_CASE("Map operator")

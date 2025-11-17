@@ -298,7 +298,7 @@ using UnicastSimple = Unicast<T, link::Simple>;
 }
 
 template<class T, EmittableOf<T> Emitter>
-constexpr bool operator|(T&& value, const Emitter& emitter)
+constexpr bool operator<<(const Emitter& emitter, T&& value)
 {
 	return emitter.empty() ? false : std::ranges::fold_left(emitter, true, [&value](bool acc, const auto& link)
 	{
@@ -363,7 +363,7 @@ struct Sink
 }
 
 template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> Operation>
-[[nodiscard]] constexpr auto operator|(const Emitter& emitter, op::Sink<Operation>&& operation)
+[[nodiscard]] constexpr auto operator>>(const Emitter& emitter, op::Sink<Operation>&& operation)
 {
 	return sink::UnicastSimple<typename Emitter::ValueType>{ emitter, std::forward<op::Sink<Operation>>(operation) };
 }

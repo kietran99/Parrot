@@ -12,13 +12,13 @@
 * Inputs:
 * Mouse.position = Signal (Int, Int) // Continuous: value always present
 * Keyboard.lastPressed = Signal Int // Discrete: value only present at certain timestamps
-* 
+*
 * Transformations:
 * Keyboard.lastPressed | transform(IsConsonant) => ('h' 'e' 'l' 'l' 'o' -> T F T T F)
-* 
+*
 * State:
 * Keyboard.lastPressed | foldp([](key, count) { return count + 1; }, 0u) => ('h' 'e' 'l' 'l' 'o' -> 1 2 3 4 5)
-* 
+*
 * Merge:
 * Signal a -> Signal a -> Signal a
 *
@@ -84,22 +84,6 @@ concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
 
 
 template<class C>
-concept Sinkable = requires(C instance)
-{
-	typename C::ValueType;
-	{ instance.Receive(std::declval<typename C::ValueType>()) };
-};
-
-template<class C, class TIn>
-concept SinkableOf = requires(C instance)
-{
-	{ instance.Receive(std::declval<TIn>()) };
-};
-
-
-
-
-template<class C>
 concept Linkable = requires(C instance)
 {
 	typename C::ValueType;
@@ -132,6 +116,27 @@ private:
 	NextFn m_next;
 };
 }
+
+template<Emittable Emitter, SignatureMatchInvocable<bool, typename Emitter::ValueType&&> Operation>
+[[nodiscard]] constexpr auto NewLink(const Emitter& emitter, Operation&& operation)
+{
+	auto link = std::make_shared<typename Emitter::LinkType>(std::forward<Operation>(operation));
+	emitter.Connect(link);
+	return link;
+}
+
+
+
+
+template<class C>
+concept Sinkable = std::constructible_from<C, std::shared_ptr<typename C::LinkType>> and requires(C instance)
+{
+	typename C::ValueType;
+	typename C::LinkType;
+};
+
+template<class C, class T>
+concept SinkableOf = Sinkable<C> and std::same_as<typename C::ValueType, T>;
 
 
 
@@ -229,15 +234,9 @@ public:
 	using ValueType = T;
 	using LinkType = Link<T>;
 
-	Unicast(const EmittableOf<ValueType> auto& emitter, SignatureMatchInvocable<bool, ValueType&&> auto&& handler)
-		: m_link(NewLink(emitter, std::forward<decltype(handler)>(handler)))
-	{}
-
-	std::shared_ptr<LinkType> NewLink(const EmittableOf<ValueType> auto& emitter, SignatureMatchInvocable<bool, ValueType&&> auto&& handler) const
+	Unicast(std::shared_ptr<LinkType> link)
+		: m_link(link)
 	{
-		auto link = std::make_shared<LinkType>(std::forward<decltype(handler)>(handler));
-		emitter.Connect(link);
-		return link;
 	}
 
 	constexpr bool Receive(ValueType&& value) const
@@ -275,7 +274,7 @@ struct Effect
 template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> Operation>
 [[nodiscard]] constexpr auto operator|(const Emitter& emitter, op::Effect<Operation>&& operation)
 {
-	return sink::UnicastSimple<typename Emitter::ValueType>{ emitter, std::forward<op::Effect<Operation>>(operation) };
+	return sink::UnicastSimple<typename Emitter::ValueType>{ NewLink(emitter, std::forward<op::Effect<Operation>>(operation)) };
 }
 
 

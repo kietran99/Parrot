@@ -70,16 +70,6 @@ namespace parrot
 template<class Fn, class Ret, class... Args>
 concept SignatureMatchInvocable = std::regular_invocable<Fn, Args...> and std::same_as<std::invoke_result_t<Fn, Args...>, Ret>;
 
-template<class C>
-concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C> and requires(C instance)
-{
-	typename C::ValueType;
-	typename C::LinkType;
-};
-
-template<class C, class T>
-concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
-
 
 
 
@@ -117,13 +107,19 @@ private:
 };
 }
 
-template<Emittable Emitter, SignatureMatchInvocable<bool, typename Emitter::ValueType&&> Operation>
-[[nodiscard]] constexpr auto NewLink(const Emitter& emitter, Operation&& operation)
+
+
+
+template<class C>
+concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C> and requires(C instance)
 {
-	auto link = std::make_shared<typename Emitter::LinkType>(std::forward<Operation>(operation));
-	emitter.Connect(link);
-	return link;
-}
+	typename C::ValueType;
+	typename C::LinkType;
+	requires Linkable<typename C::LinkType>;
+};
+
+template<class C, class T>
+concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
 
 
 
@@ -133,6 +129,7 @@ concept Sinkable = std::constructible_from<C, std::shared_ptr<typename C::LinkTy
 {
 	typename C::ValueType;
 	typename C::LinkType;
+	requires Linkable<typename C::LinkType>;
 };
 
 template<class C, class T>
@@ -140,6 +137,14 @@ concept SinkableOf = Sinkable<C> and std::same_as<typename C::ValueType, T>;
 
 
 
+
+template<Emittable Emitter, SignatureMatchInvocable<bool, typename Emitter::ValueType&&> Operation>
+[[nodiscard]] constexpr auto NewLink(const Emitter& emitter, Operation&& operation)
+{
+	auto link = std::make_shared<typename Emitter::LinkType>(std::forward<Operation>(operation));
+	emitter.Connect(link);
+	return link;
+}
 
 namespace emit
 {
@@ -220,6 +225,7 @@ constexpr bool operator<<(const Emitter& emitter, T&& value)
 		return acc && link.Push(std::remove_cvref_t<T>(value));
 	});
 }
+
 
 
 

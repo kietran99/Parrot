@@ -116,6 +116,7 @@ concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C
 	typename C::ValueType;
 	typename C::LinkType;
 	requires Linkable<typename C::LinkType>;
+	requires Linkable<typename C::iterator::value_type>;
 };
 
 template<class C, class T>
@@ -190,6 +191,8 @@ public:
 	};
 
 	static_assert(std::forward_iterator<Iterator>);
+
+	using iterator = Iterator;
 
 	Unicast()
 		: m_optWeakLink()

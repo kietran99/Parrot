@@ -267,7 +267,7 @@ namespace op
 template<class Fn>
 struct Effect
 {
-	constexpr Effect(Fn&& fn)
+	constexpr explicit Effect(Fn&& fn)
 		: func(std::forward<Fn>(fn))
 	{}
 

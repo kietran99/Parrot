@@ -31,6 +31,7 @@ static void Test()
 
 	auto x = arr | transformView;
 	auto y = arr | transformView | filterView;
+	auto z = y | std::ranges::to<std::vector>();
 	
 	//auto x = std::ranges::fold_left(arr, 0, [](int count, uint64_t key) { return count + 1; });
 	//auto foldpState = parrot::Foldp([](uint64_t key, uint32_t count) { return count + 1; }, 0u);
@@ -232,8 +233,6 @@ TEST_CASE("Ref operator")
 	const parrot::Signal<CustomType> signalCustom{};
 	static_assert(std::is_same_v<op::OperableValueType<decltype(op::Ref(signalCustom))>, CustomType>);
 
-	//Emitter<float, pipe::port::in::UnicastSimple, emit::preprocess::None> emitter{ pipe::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
-	//Sink<float, pipe::port::out::UnicastSimple, sink::Snapshot> sinker{ pipe::port::out::UnicastSimple<float>{}, sink::Snapshot{ 4.0f } };
 	emit::UnicastSimple<float> emitter{};
 	float value{ 0.0f };
 	sink::UnicastSimple<float> sinker = emitter | op::Effect([&value](float&& newValue) { value = std::move(newValue); return true; });

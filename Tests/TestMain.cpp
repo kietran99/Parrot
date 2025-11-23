@@ -38,6 +38,74 @@ static void Test()
 
 struct CustomType {};
 
+TEST_CASE("Pipeable functionality")
+{
+	using namespace parrot;
+
+	SUBCASE("Pipeable concept validation with mock types")
+	{
+		struct MockGood
+		{
+			using ValueType = int;
+			constexpr bool operator()(ValueType&&) const { return true; }
+		};
+
+		struct MockBadNoValueType
+		{
+			constexpr bool operator()(int&&) const { return true; }
+		};
+
+		struct MockBadWrongSignature
+		{
+			using ValueType = int;
+			constexpr void operator()(ValueType&&) const {}
+		};
+
+		static_assert(Pipeable<MockGood>);
+		static_assert(PipeableOf<MockGood, int>);
+		static_assert(!Pipeable<MockBadNoValueType>);
+		static_assert(!PipeableOf<MockBadWrongSignature, int>);
+	}
+
+	SUBCASE("pipe::Simple type aliases")
+	{
+		static_assert(std::is_same_v<pipe::Simple<int>::ValueType, int>);
+		static_assert(std::is_same_v<pipe::Simple<int>::NextFn, std::function<bool(int&&)>>);
+		static_assert(Pipeable<pipe::Simple<int>>);
+		static_assert(PipeableOf<pipe::Simple<int>, int>);
+	}
+
+	SUBCASE("pipe::Simple with std::function (capturing lambda)")
+	{
+		int calls = 0;
+		std::function<bool(int&&)> fn = [&](int&& v) -> bool { ++calls; return v == 5; };
+		pipe::Simple<int> p(fn);
+
+		REQUIRE(p(5) == true);
+		REQUIRE(p(1) == false);
+		REQUIRE(calls == 2);
+	}
+
+	SUBCASE("pipe::Simple with stateless lambda (convertible to function-like)")
+	{
+		auto stateless = [](int&& v) -> bool { return (v % 2) == 0; };
+		pipe::Simple<int> p(stateless);
+
+		REQUIRE(p(4) == true);
+		REQUIRE(p(3) == false);
+	}
+
+	SUBCASE("pipe::Simple with capturing lambda updates state")
+	{
+		int acc = 0;
+		pipe::Simple<int> p([&acc](int&& v) -> bool { acc += v; return true; });
+
+		REQUIRE(p(2) == true);
+		REQUIRE(p(3) == true);
+		REQUIRE(acc == 5);
+	}
+}
+
 TEST_CASE("Emittable functionality")
 {
 	using namespace parrot;

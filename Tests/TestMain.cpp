@@ -38,37 +38,6 @@ static void Test()
 
 struct CustomType {};
 
-namespace parrot
-{
-namespace link::mock
-{
-// A struct that fully satisfies both Emittable and Linkable concepts (Push returns bool, takes T&&).
-template<class T>
-struct ValidLink
-{
-	using ValueType = T;
-	bool Push(ValueType&& value) const { return true; }
-};
-
-// Violates Linkable/Emittable: wrong return type (void instead of bool).
-template<class T>
-struct InvalidLinkWrongReturn
-{
-	using ValueType = T;
-	void Push(ValueType&& value) const {}
-};
-
-// Violates LinkableOf/EmittableOf: ValueType is fixed to int, breaking type T requirement.
-template<class T>
-struct InvalidLinkWrongValueType
-{
-	// If T is float, this violates LinkableOf<C, float>
-	using ValueType = int;
-	bool Push(int&& value) const { return true; }
-};
-}
-}
-
 TEST_CASE("Emittable functionality")
 {
 	using namespace parrot;
@@ -86,8 +55,8 @@ TEST_CASE("Emittable functionality")
 	{
 		int pushCount = 0;
 
-		// 1. Create the sink (link::Simple) 
-		auto sink = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+		// 1. Create the sink (pipe::Simple) 
+		auto sink = std::make_shared<pipe::Simple<int>>([&](int&&) -> bool
 		{
 			pushCount++;
 			return true;
@@ -106,20 +75,20 @@ TEST_CASE("Emittable functionality")
 		REQUIRE(pushCount == 2);
 	}
 	
-	SUBCASE("emit::Unicast only binds to the last link (Unicast behavior)")
+	SUBCASE("emit::Unicast only binds to the last pipe (Unicast behavior)")
 	{
 		int pushCountA = 0;
 		int pushCountB = 0;
 
-		// 1. Create Link A
-		auto linkA = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+		// 1. Create Pipe A
+		auto pipeA = std::make_shared<pipe::Simple<int>>([&](int&&) -> bool
 		{
 			pushCountA++;
 			return true;
 		});
 
-		// 2. Create Link B
-		auto linkB = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+		// 2. Create Pipe B
+		auto pipeB = std::make_shared<pipe::Simple<int>>([&](int&&) -> bool
 		{
 			pushCountB++;
 			return true;
@@ -128,7 +97,7 @@ TEST_CASE("Emittable functionality")
 		const emit::UnicastSimple<int> emitter{};
 
 		// Connect to A
-		emitter.Connect(linkA);
+		emitter.Connect(pipeA);
 
 		// Push 1: Should go to A
 		emitter << 1;
@@ -136,7 +105,7 @@ TEST_CASE("Emittable functionality")
 		REQUIRE(pushCountB == 0);
 
 		// Connect to B (This overwrites A)
-		emitter.Connect(linkB);
+		emitter.Connect(pipeB);
 
 		// Push 2: Should go to B, NOT A
 		emitter << 2;
@@ -149,14 +118,14 @@ TEST_CASE("Emittable functionality")
 		REQUIRE(pushCountB == 2); // Now 2
 	}
 
-	SUBCASE("emit::UnicastSimple fails gracefully if link is disconnected (expired)")
+	SUBCASE("emit::UnicastSimple fails gracefully if pipe is disconnected (expired)")
 	{
 		int pushCount = 0;
 		const emit::UnicastSimple<int> emitter{};
 
 		{ // Scope block for shared_ptr
 			// 1. Create shared sink
-			auto sink = std::make_shared<link::Simple<int>>([&](int&&) -> bool
+			auto sink = std::make_shared<pipe::Simple<int>>([&](int&&) -> bool
 			{
 				pushCount++;
 				return true;
@@ -195,8 +164,8 @@ TEST_CASE("Ref operator")
 	const parrot::Signal<CustomType> signalCustom{};
 	static_assert(std::is_same_v<op::OperableValueType<decltype(op::Ref(signalCustom))>, CustomType>);
 
-	//Emitter<float, link::port::in::UnicastSimple, emit::preprocess::None> emitter{ link::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
-	//Sink<float, link::port::out::UnicastSimple, sink::Snapshot> sinker{ link::port::out::UnicastSimple<float>{}, sink::Snapshot{ 4.0f } };
+	//Emitter<float, pipe::port::in::UnicastSimple, emit::preprocess::None> emitter{ pipe::port::in::UnicastSimple<float>{}, emit::preprocess::None<float>{} };
+	//Sink<float, pipe::port::out::UnicastSimple, sink::Snapshot> sinker{ pipe::port::out::UnicastSimple<float>{}, sink::Snapshot{ 4.0f } };
 	emit::UnicastSimple<float> emitter{};
 	float value{ 0.0f };
 	sink::UnicastSimple<float> sinker = emitter | op::Effect([&value](float&& newValue) { value = std::move(newValue); return true; });
@@ -235,7 +204,7 @@ TEST_CASE("Map operator")
 	//		| parrot::op::Map([](uint64_t key) { return std::ranges::contains(std::array{ 'a', 'e', 'i', 'o', 'u' }, key); })
 	//		;
 	//	parrot::sink::Snapshot<bool> snapshotSink{ true };
-	//	isConsonant.Link(parrot::sink::Ref<parrot::sink::Snapshot<bool>, bool>(snapshotSink));
+	//	isConsonant.Pipe(parrot::sink::Ref<parrot::sink::Snapshot<bool>, bool>(snapshotSink));
 
 	//	lastPressed.Push(12u);
 

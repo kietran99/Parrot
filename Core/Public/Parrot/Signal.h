@@ -218,7 +218,7 @@ constexpr bool operator<<(const Emitter& emitter, T&& value)
 
 
 template<class C>
-concept Sinkable = std::constructible_from<C, std::shared_ptr<typename C::PipeType>> and requires(C instance)
+concept Sinkable = requires(C instance)
 {
 	typename C::ValueType;
 	typename C::PipeType;
@@ -240,14 +240,7 @@ public:
 
 	Unicast(std::shared_ptr<PipeType> pipe)
 		: m_pipe(pipe)
-	{
-	}
-
-	constexpr bool Receive(ValueType&& value) const
-	{
-		//return std::invoke(m_handler, std::move(value));
-		return false;
-	}
+	{}
 
 private:
 	std::shared_ptr<PipeType> m_pipe;
@@ -266,7 +259,9 @@ struct Effect
 		: func(std::forward<Fn>(fn))
 	{}
 
-	constexpr bool operator()(auto&& value) const
+	template<class T>
+		requires SignatureMatchInvocable<Fn, bool, T&&>
+	constexpr bool operator()(T&& value) const
 	{
 		return std::invoke(func, std::forward<decltype(value)>(value));
 	}
@@ -276,9 +271,23 @@ struct Effect
 }
 
 template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> Operation>
+struct SinkClosure
+{
+	template<SinkableOf<typename Emitter::ValueType> Sink>
+		requires std::constructible_from<Sink, std::shared_ptr<typename Emitter::PipeType>>
+	constexpr operator Sink() const
+	{
+		return Sink{ NewPipe(emitter, std::forward<op::Effect<Operation>>(operation)) };
+	}
+
+	const Emitter& emitter;
+	op::Effect<Operation>&& operation;
+};
+
+template<Emittable Emitter, std::regular_invocable<typename Emitter::ValueType> Operation>
 [[nodiscard]] constexpr auto operator|(const Emitter& emitter, op::Effect<Operation>&& operation)
 {
-	return sink::UnicastSimple<typename Emitter::ValueType>{ NewPipe(emitter, std::forward<op::Effect<Operation>>(operation)) };
+	return SinkClosure<Emitter, Operation>{ emitter, std::forward<op::Effect<Operation>>(operation) };
 }
 
 

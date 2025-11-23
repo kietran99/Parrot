@@ -68,7 +68,7 @@ private:
 namespace parrot
 {
 template<class Fn, class Ret, class... Args>
-concept SignatureMatchInvocable = std::regular_invocable<Fn, Args...> and std::same_as<std::invoke_result_t<Fn, Args...>, Ret>;
+concept SignatureMatchInvocable = std::same_as<std::invoke_result_t<Fn, Args...>, Ret>;
 
 
 

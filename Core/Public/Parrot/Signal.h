@@ -74,10 +74,9 @@ concept SignatureMatchInvocable = std::regular_invocable<Fn, Args...> and std::s
 
 
 template<class C>
-concept Linkable = /*SignatureMatchInvocable<bool, typename C::ValueType&&> and */requires(C instance)
+concept Linkable = SignatureMatchInvocable<C, bool, typename C::ValueType&&> and requires(C instance)
 {
 	typename C::ValueType;
-	{ instance.Push(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
 };
 
 template<class C, class T>
@@ -95,12 +94,6 @@ public:
 	constexpr Simple(SignatureMatchInvocable<bool, ValueType&&> auto&& fn)
 		: m_next(std::forward<decltype(fn)>(fn))
 	{}
-
-	constexpr bool Push(ValueType&& value) const
-	{
-		assert(m_next != nullptr);
-		return std::invoke(m_next, std::move(value));
-	}
 
 	constexpr bool operator()(ValueType&& value) const
 	{
@@ -231,7 +224,7 @@ constexpr bool operator<<(const Emitter& emitter, T&& value)
 {
 	return emitter.empty() ? false : std::ranges::fold_left(emitter, true, [&value](bool acc, const auto& link)
 	{
-		return acc && link.Push(std::remove_cvref_t<T>(value));
+		return acc && std::invoke(link, std::remove_cvref_t<T>(value));
 	});
 }
 

@@ -116,13 +116,11 @@ concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C
 	typename C::PipeType;
 	requires PipeableOf<typename C::PipeType, typename C::ValueType>;
 	requires PipeableOf<typename C::iterator::value_type, typename C::ValueType>;
+	{ instance.Connect(std::weak_ptr<typename C::PipeType>{}) };
 };
 
 template<class C, class T>
 concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
-
-
-
 
 template<Emittable Emitter, SignatureMatchInvocable<bool, typename Emitter::ValueType&&> Operation>
 [[nodiscard]] constexpr auto NewPipe(const Emitter& emitter, Operation&& operation)

@@ -74,7 +74,7 @@ concept SignatureMatchInvocable = std::regular_invocable<Fn, Args...> and std::s
 
 
 template<class C>
-concept Linkable = requires(C instance)
+concept Linkable = /*SignatureMatchInvocable<bool, typename C::ValueType&&> and */requires(C instance)
 {
 	typename C::ValueType;
 	{ instance.Push(std::declval<typename C::ValueType>()) } -> std::same_as<bool>;
@@ -102,6 +102,12 @@ public:
 		return std::invoke(m_next, std::move(value));
 	}
 
+	constexpr bool operator()(ValueType&& value) const
+	{
+		assert(m_next != nullptr);
+		return std::invoke(m_next, std::move(value));
+	}
+
 private:
 	NextFn m_next;
 };
@@ -115,8 +121,8 @@ concept Emittable = std::ranges::forward_range<C> and std::ranges::sized_range<C
 {
 	typename C::ValueType;
 	typename C::LinkType;
-	requires Linkable<typename C::LinkType>;
-	requires Linkable<typename C::iterator::value_type>;
+	requires LinkableOf<typename C::LinkType, typename C::ValueType>;
+	requires LinkableOf<typename C::iterator::value_type, typename C::ValueType>;
 };
 
 template<class C, class T>
@@ -130,7 +136,7 @@ concept Sinkable = std::constructible_from<C, std::shared_ptr<typename C::LinkTy
 {
 	typename C::ValueType;
 	typename C::LinkType;
-	requires Linkable<typename C::LinkType>;
+	requires LinkableOf<typename C::LinkType, typename C::ValueType>;
 };
 
 template<class C, class T>

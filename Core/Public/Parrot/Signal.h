@@ -124,20 +124,6 @@ concept EmittableOf = Emittable<C> and std::same_as<typename C::ValueType, T>;
 
 
 
-template<class C>
-concept Sinkable = std::constructible_from<C, std::shared_ptr<typename C::PipeType>> and requires(C instance)
-{
-	typename C::ValueType;
-	typename C::PipeType;
-	requires PipeableOf<typename C::PipeType, typename C::ValueType>;
-};
-
-template<class C, class T>
-concept SinkableOf = Sinkable<C> and std::same_as<typename C::ValueType, T>;
-
-
-
-
 template<Emittable Emitter, SignatureMatchInvocable<bool, typename Emitter::ValueType&&> Operation>
 [[nodiscard]] constexpr auto NewPipe(const Emitter& emitter, Operation&& operation)
 {
@@ -231,6 +217,16 @@ constexpr bool operator<<(const Emitter& emitter, T&& value)
 
 
 
+template<class C>
+concept Sinkable = std::constructible_from<C, std::shared_ptr<typename C::PipeType>> and requires(C instance)
+{
+	typename C::ValueType;
+	typename C::PipeType;
+	requires PipeableOf<typename C::PipeType, typename C::ValueType>;
+};
+
+template<class C, class T>
+concept SinkableOf = Sinkable<C> and std::same_as<typename C::ValueType, T>;
 
 namespace sink
 {
